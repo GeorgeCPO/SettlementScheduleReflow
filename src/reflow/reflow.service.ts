@@ -7,7 +7,15 @@ import {
   toUtcIso,
 } from '../utils/date-utils.ts';
 import { sortByDependencies } from './dag.ts';
-import type { Booking, ReflowInput, ReflowResult, SettlementChannel, SettlementTask, TaskChange } from './types.ts';
+import type {
+  Booking,
+  ReflowInput,
+  ReflowResult,
+  SettlementChannel,
+  SettlementTask,
+  TaskChange,
+  TradeOrder,
+} from './types.ts';
 
 export class ReflowService {
   // Reschedules tasks so that:
@@ -16,6 +24,7 @@ export class ReflowService {
   //   3. regulatory holds keep their original dates,
   //   4. tasks only process while their channel is open (operating hours, minus blackouts).
   // Tasks only ever move later, never earlier than originally planned.
+  // Throws when the result is impossible, e.g. a task would finish after its trade order's settlement date.
   reflow(input: ReflowInput): ReflowResult {
     // Copy so the caller's input is never mutated.
     const tasks = structuredClone(input.settlementTasks);
@@ -47,6 +56,9 @@ export class ReflowService {
       placedById[task.docId] = task;
     }
 
+    // Step 3: every task must finish by its trade order's settlement date.
+    assertSettlementDeadlines(tasks, input.tradeOrders, reasonsById);
+
     // Results keep the caller's task order; sorting is an internal detail.
     const changes: TaskChange[] = [];
     const explanation: string[] = [];
@@ -70,6 +82,44 @@ function indexChannelsById(channels: SettlementChannel[]): Record<string, Settle
     channelsById[channel.docId] = channel;
   }
   return channelsById;
+}
+
+// Throws when any task ends after its trade order's settlement date (ending exactly on it is fine).
+// Checks every task first so one error lists all the breaches, each with the reasons the task moved.
+function assertSettlementDeadlines(
+  tasks: SettlementTask[],
+  tradeOrders: TradeOrder[],
+  reasonsById: Record<string, string[]>,
+): void {
+  const tradeOrdersById: Record<string, TradeOrder> = {};
+  for (const tradeOrder of tradeOrders) {
+    tradeOrdersById[tradeOrder.docId] = tradeOrder;
+  }
+
+  const breaches: string[] = [];
+  for (const task of tasks) {
+    const tradeOrderId = task.data.tradeOrderId;
+    const tradeOrder = tradeOrdersById[tradeOrderId];
+    if (!tradeOrder) {
+      throw new Error(`Task ${task.data.taskReference} belongs to unknown trade order ${tradeOrderId}`);
+    }
+
+    const deadline = tradeOrder.data.settlementDate;
+    if (parseUtc(task.data.endDate) <= parseUtc(deadline)) {
+      continue;
+    }
+
+    let breach = `Task ${task.data.taskReference} cannot meet settlement deadline ${deadline}: ends ${task.data.endDate}`;
+    const reasons = reasonsById[task.docId]!;
+    if (reasons.length > 0) {
+      breach += ` (${reasons.join(', ')})`;
+    }
+    breaches.push(breach);
+  }
+
+  if (breaches.length > 0) {
+    throw new Error(breaches.join('\n'));
+  }
 }
 
 // Returns every channel's bookings, starting with only the regulatory holds on it.

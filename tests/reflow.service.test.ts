@@ -7,6 +7,7 @@ import type {
   SettlementChannel,
   SettlementTask,
   SettlementTaskData,
+  TradeOrder,
 } from '../src/reflow/types.ts';
 import { parseUtc, toUtcIso } from '../src/utils/date-utils.ts';
 
@@ -56,16 +57,30 @@ function weekdayChannel(docId: string, blackoutWindows: BlackoutWindow[] = []): 
 
 const alwaysOpenChannels = [alwaysOpenChannel('channel-1'), alwaysOpenChannel('channel-2'), alwaysOpenChannel('channel-3')];
 
-// Trade orders aren't read yet.
-function reflow(tasks: SettlementTask[], settlementChannels = alwaysOpenChannels): Record<string, [string, string]> {
-  const { updatedTasks } = new ReflowService().reflow({ settlementTasks: tasks, settlementChannels, tradeOrders: [] });
+function tradeOrder(docId: string, settlementDate: string): TradeOrder {
+  return {
+    docId,
+    docType: 'tradeOrder',
+    data: { tradeOrderNumber: docId, instrumentId: 'instrument-1', quantity: 100, settlementDate },
+  };
+}
+
+// A deadline far enough away that only the deadline tests run into it.
+const farDeadlineTradeOrders = [tradeOrder('order-1', '2099-01-01T00:00:00Z')];
+
+function reflow(
+  tasks: SettlementTask[],
+  settlementChannels = alwaysOpenChannels,
+  tradeOrders = farDeadlineTradeOrders,
+): Record<string, [string, string]> {
+  const { updatedTasks } = new ReflowService().reflow({ settlementTasks: tasks, settlementChannels, tradeOrders });
   return Object.fromEntries(
     updatedTasks.map((t) => [t.docId, [new Date(t.data.startDate).toISOString(), new Date(t.data.endDate).toISOString()]]),
   );
 }
 
 function reflowResult(tasks: SettlementTask[], settlementChannels = alwaysOpenChannels): ReflowResult {
-  return new ReflowService().reflow({ settlementTasks: tasks, settlementChannels, tradeOrders: [] });
+  return new ReflowService().reflow({ settlementTasks: tasks, settlementChannels, tradeOrders: farDeadlineTradeOrders });
 }
 
 // The recorded reasons for one task, or undefined when it has no change entry.
@@ -163,7 +178,7 @@ describe('ReflowService', () => {
     const { updatedTasks } = new ReflowService().reflow({
       settlementTasks: tasks,
       settlementChannels: alwaysOpenChannels,
-      tradeOrders: [],
+      tradeOrders: farDeadlineTradeOrders,
     });
 
     expect(updatedTasks.map((t) => t.docId)).toEqual(['b', 'a']);
@@ -286,5 +301,51 @@ describe('ReflowService changes', () => {
     ]);
     expect(result.changes).toEqual([]);
     expect(result.explanation).toEqual([]);
+  });
+});
+
+describe('ReflowService settlement deadlines', () => {
+  it('throws when a moved task ends after its settlement date, with why it moved', () => {
+    // b waits for a until 13:00, then runs to 14:00, past the 13:30 deadline.
+    const tasks = [
+      task('a', '2024-01-15T11:00:00Z', { durationMinutes: 120 }),
+      task('b', '2024-01-15T11:00:00Z', { dependsOnTaskIds: ['a'], settlementChannelId: 'channel-2' }),
+    ];
+    const tradeOrders = [tradeOrder('order-1', '2024-01-15T13:30:00Z')];
+    expect(() => reflow(tasks, alwaysOpenChannels, tradeOrders)).toThrow(
+      'Task b cannot meet settlement deadline 2024-01-15T13:30:00Z: ends 2024-01-15T14:00:00Z (waited for a)',
+    );
+  });
+
+  it('lists every breach in one error', () => {
+    // a pauses overnight and ends Tue 09:00; b waits for it and ends Tue 10:00. Both orders settle Mon 16:00.
+    const tasks = [
+      task('a', '2024-01-15T15:00:00Z', { durationMinutes: 120 }),
+      task('b', '2024-01-15T15:00:00Z', { dependsOnTaskIds: ['a'], tradeOrderId: 'order-2' }),
+      task('c', '2024-01-15T08:00:00Z', { settlementChannelId: 'channel-2' }),
+    ];
+    const tradeOrders = [tradeOrder('order-1', '2024-01-15T16:00:00Z'), tradeOrder('order-2', '2024-01-15T16:00:00Z')];
+    const channels = [weekdayChannel('channel-1'), weekdayChannel('channel-2')];
+    expect(() => reflow(tasks, channels, tradeOrders)).toThrow(
+      [
+        'Task a cannot meet settlement deadline 2024-01-15T16:00:00Z: ends 2024-01-16T09:00:00Z (outside operating hours)',
+        'Task b cannot meet settlement deadline 2024-01-15T16:00:00Z: ends 2024-01-16T10:00:00Z (waited for a)',
+      ].join('\n'),
+    );
+  });
+
+  it('accepts a task that ends exactly on its settlement date', () => {
+    const tasks = [
+      task('a', '2024-01-15T11:00:00Z', { durationMinutes: 120 }),
+      task('b', '2024-01-15T11:00:00Z', { dependsOnTaskIds: ['a'], settlementChannelId: 'channel-2' }),
+    ];
+    const tradeOrders = [tradeOrder('order-1', '2024-01-15T14:00:00Z')];
+    const schedule = reflow(tasks, alwaysOpenChannels, tradeOrders);
+    expect(schedule.b).toEqual(['2024-01-15T13:00:00.000Z', '2024-01-15T14:00:00.000Z']);
+  });
+
+  it('throws when a task belongs to a trade order that is not in the input', () => {
+    const tasks = [task('a', '2024-01-15T08:00:00Z', { tradeOrderId: 'order-missing' })];
+    expect(() => reflow(tasks)).toThrow('Task a belongs to unknown trade order order-missing');
   });
 });
