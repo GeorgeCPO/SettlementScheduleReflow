@@ -43,7 +43,7 @@ export interface OperatingHours {
   dayOfWeek: number;
   /** 0–23, inclusive */
   startHour: number;
-  /** 0–23, exclusive (8–16 means 08:00–16:00) */
+  /** 0–23, exclusive (8–16 means 08:00–16:00); 0 is midnight at the end of the day (0–0 is open all day) */
   endHour: number;
 }
 

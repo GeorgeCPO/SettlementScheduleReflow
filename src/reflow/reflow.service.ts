@@ -1,17 +1,19 @@
 import type { DateTime } from 'luxon';
-import { parseUtc, toUtcIso } from '../utils/date-utils.ts';
+import { calculateEndDateWithOperatingHours, nextOpenMinute, parseUtc, toUtcIso } from '../utils/date-utils.ts';
 import { sortByDependencies } from './dag.ts';
-import type { Booking, ReflowInput, ReflowResult, SettlementTask } from './types.ts';
+import type { Booking, ReflowInput, ReflowResult, SettlementChannel, SettlementTask } from './types.ts';
 
 export class ReflowService {
   // Reschedules tasks so that:
   //   1. every task starts after all of its dependencies have finished,
   //   2. each channel runs one task at a time,
-  //   3. regulatory holds keep their original dates.
+  //   3. regulatory holds keep their original dates,
+  //   4. tasks only process while their channel is open (operating hours, minus blackouts).
   // Tasks only ever move later, never earlier than originally planned.
   reflow(input: ReflowInput): ReflowResult {
     // Copy so the caller's input is never mutated.
     const tasks = structuredClone(input.settlementTasks);
+    const channelsById = indexChannelsById(input.settlementChannels);
 
     // Step 1: holds can't move, so their channel time is booked before anything else is placed.
     const bookingsByChannel = bookRegulatoryHolds(tasks);
@@ -25,7 +27,12 @@ export class ReflowService {
       if (task.data.isRegulatoryHold) {
         assertHoldCanStart(task, earliestStart);
       } else {
-        moveToFirstFreeSlot(task, earliestStart, bookingsByChannel[task.data.settlementChannelId]!);
+        const channelId = task.data.settlementChannelId;
+        const channel = channelsById[channelId];
+        if (!channel) {
+          throw new Error(`Task ${task.data.taskReference} uses unknown settlement channel ${channelId}`);
+        }
+        moveToFirstFreeSlot(task, earliestStart, bookingsByChannel[channelId]!, channel);
       }
 
       endById[task.docId] = parseUtc(task.data.endDate);
@@ -34,6 +41,14 @@ export class ReflowService {
     // Results keep the caller's task order; sorting is an internal detail.
     return { updatedTasks: tasks };
   }
+}
+
+function indexChannelsById(channels: SettlementChannel[]): Record<string, SettlementChannel> {
+  const channelsById: Record<string, SettlementChannel> = {};
+  for (const channel of channels) {
+    channelsById[channel.docId] = channel;
+  }
+  return channelsById;
 }
 
 // Returns every channel's bookings, starting with only the regulatory holds on it.
@@ -70,6 +85,7 @@ function earliestAllowedStart(task: SettlementTask, endById: Record<string, Date
 }
 
 // A hold can't be pushed back, so a dependency that runs past its start makes the schedule impossible.
+// Holds are not checked against operating hours: they are fixed by regulation, not by the channel.
 function assertHoldCanStart(hold: SettlementTask, earliestStart: DateTime): void {
   if (earliestStart > parseUtc(hold.data.startDate)) {
     throw new Error(`Regulatory hold ${hold.data.taskReference} starts before its dependencies finish`);
@@ -77,34 +93,41 @@ function assertHoldCanStart(hold: SettlementTask, earliestStart: DateTime): void
 }
 
 // Moves the task to the first free slot on its channel at or after `earliestStart`, and books that slot.
-function moveToFirstFreeSlot(task: SettlementTask, earliestStart: DateTime, bookings: Booking[]): void {
-  const minutes = task.data.durationMinutes;
-  const start = findFreeSlot(bookings, earliestStart, minutes);
-  const end = start.plus({ minutes });
+// @upgrade prepTimeMinutes is ignored; add it to the working minutes once a scenario needs it.
+function moveToFirstFreeSlot(
+  task: SettlementTask,
+  earliestStart: DateTime,
+  bookings: Booking[],
+  channel: SettlementChannel,
+): void {
+  const slot = findFreeSlot(bookings, earliestStart, task.data.durationMinutes, channel);
 
-  bookings.push({ start, end });
-  task.data.startDate = toUtcIso(start);
-  task.data.endDate = toUtcIso(end);
+  bookings.push(slot);
+  task.data.startDate = toUtcIso(slot.start);
+  task.data.endDate = toUtcIso(slot.end);
 }
 
-// Returns the first start at or after `from` where `minutes` fits between the channel's bookings.
-// Walks the bookings in time order with a candidate start:
+// Returns the first slot at or after `from` where `minutes` of working time fits between the channel's bookings.
+// A slot spans from its start to its end including any pauses (overnight, blackouts), and all of it occupies the channel.
+// Walks the bookings in time order with a candidate slot, whose start is always an open minute:
 //   - booking is over before the candidate  → irrelevant, skip it
 //   - task would end before the booking     → it fits in the gap, done
-//   - otherwise they'd overlap              → try again right after that booking
-function findFreeSlot(bookings: Booking[], from: DateTime, minutes: number): DateTime {
+//   - otherwise they'd overlap              → try again at the first open minute after that booking
+function findFreeSlot(bookings: Booking[], from: DateTime, minutes: number, channel: SettlementChannel): Booking {
   const inTimeOrder = [...bookings].sort((a, b) => a.start.toMillis() - b.start.toMillis());
-  let candidate = from;
+  let start = nextOpenMinute(from, channel);
+  let end = calculateEndDateWithOperatingHours(start, minutes, channel);
   for (const booking of inTimeOrder) {
-    if (booking.end <= candidate) {
+    if (booking.end <= start) {
       continue;
     }
 
-    if (candidate.plus({ minutes }) <= booking.start) {
+    if (end <= booking.start) {
       break;
     }
 
-    candidate = booking.end;
+    start = nextOpenMinute(booking.end, channel);
+    end = calculateEndDateWithOperatingHours(start, minutes, channel);
   }
-  return candidate;
+  return { start, end };
 }

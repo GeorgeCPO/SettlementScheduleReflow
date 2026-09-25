@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { ReflowService } from '../src/reflow/reflow.service.ts';
-import type { SettlementTask, SettlementTaskData } from '../src/reflow/types.ts';
+import type { BlackoutWindow, OperatingHours, SettlementChannel, SettlementTask, SettlementTaskData } from '../src/reflow/types.ts';
 
 function task(docId: string, startDate: string, overrides: Partial<SettlementTaskData> = {}): SettlementTask {
   return {
@@ -21,9 +21,33 @@ function task(docId: string, startDate: string, overrides: Partial<SettlementTas
   };
 }
 
-// Channels and trade orders aren't read yet (operating hours come later).
-function reflow(tasks: SettlementTask[]): Record<string, [string, string]> {
-  const { updatedTasks } = new ReflowService().reflow({ settlementTasks: tasks, settlementChannels: [], tradeOrders: [] });
+function channel(docId: string, operatingHours: OperatingHours[], blackoutWindows: BlackoutWindow[] = []): SettlementChannel {
+  return { docId, docType: 'settlementChannel', data: { name: docId, operatingHours, blackoutWindows } };
+}
+
+// Open every day from midnight to midnight, so operating hours never affect the schedule.
+function alwaysOpenChannel(docId: string): SettlementChannel {
+  const operatingHours = [];
+  for (let dayOfWeek = 0; dayOfWeek <= 6; dayOfWeek++) {
+    operatingHours.push({ dayOfWeek, startHour: 0, endHour: 0 });
+  }
+  return channel(docId, operatingHours);
+}
+
+// Open Mon–Fri 08:00–16:00 UTC, like the scenario channels.
+function weekdayChannel(docId: string, blackoutWindows: BlackoutWindow[] = []): SettlementChannel {
+  const operatingHours = [];
+  for (let dayOfWeek = 1; dayOfWeek <= 5; dayOfWeek++) {
+    operatingHours.push({ dayOfWeek, startHour: 8, endHour: 16 });
+  }
+  return channel(docId, operatingHours, blackoutWindows);
+}
+
+const alwaysOpenChannels = [alwaysOpenChannel('channel-1'), alwaysOpenChannel('channel-2'), alwaysOpenChannel('channel-3')];
+
+// Trade orders aren't read yet.
+function reflow(tasks: SettlementTask[], settlementChannels = alwaysOpenChannels): Record<string, [string, string]> {
+  const { updatedTasks } = new ReflowService().reflow({ settlementTasks: tasks, settlementChannels, tradeOrders: [] });
   return Object.fromEntries(
     updatedTasks.map((t) => [t.docId, [new Date(t.data.startDate).toISOString(), new Date(t.data.endDate).toISOString()]]),
   );
@@ -115,11 +139,72 @@ describe('ReflowService', () => {
     const tasks = [task('b', '2024-01-15T09:00:00Z', { dependsOnTaskIds: ['a'] }), task('a', '2024-01-15T08:30:00Z')];
     const before = structuredClone(tasks);
 
-    const { updatedTasks } = new ReflowService().reflow({ settlementTasks: tasks, settlementChannels: [], tradeOrders: [] });
+    const { updatedTasks } = new ReflowService().reflow({
+      settlementTasks: tasks,
+      settlementChannels: alwaysOpenChannels,
+      tradeOrders: [],
+    });
 
     expect(updatedTasks.map((t) => t.docId)).toEqual(['b', 'a']);
     expect(updatedTasks[0]!.data.startDate).toBe('2024-01-15T09:30:00Z');
     expect(tasks).toEqual(before);
+  });
+
+  it('keeps the whole span of a paused task, overnight included, off-limits to other tasks', () => {
+    // 2024-01-15 is a Monday; a runs 60 min Mon, pauses overnight, 60 min Tue.
+    const schedule = reflow(
+      [task('a', '2024-01-15T15:00:00Z', { durationMinutes: 120 }), task('b', '2024-01-15T15:30:00Z')],
+      [weekdayChannel('channel-1')],
+    );
+    expect(schedule.a).toEqual(['2024-01-15T15:00:00.000Z', '2024-01-16T09:00:00.000Z']);
+    expect(schedule.b).toEqual(['2024-01-16T09:00:00.000Z', '2024-01-16T10:00:00.000Z']);
+  });
+
+  it('moves a task whose overnight pause would overlap a regulatory hold', () => {
+    // a would run 30 min Mon, pause overnight, 90 min Tue; the hold sits in that pause.
+    const schedule = reflow(
+      [
+        task('hold', '2024-01-15T20:00:00Z', { isRegulatoryHold: true, endDate: '2024-01-15T21:00:00Z' }),
+        task('a', '2024-01-15T15:30:00Z', { durationMinutes: 120 }),
+      ],
+      [weekdayChannel('channel-1')],
+    );
+    expect(schedule.a).toEqual(['2024-01-16T08:00:00.000Z', '2024-01-16T10:00:00.000Z']);
+  });
+
+  it('moves a start that falls inside a blackout to when the blackout ends', () => {
+    const blackout = { startDate: '2024-01-16T09:00:00Z', endDate: '2024-01-16T11:00:00Z' };
+    const schedule = reflow([task('a', '2024-01-16T09:30:00Z')], [weekdayChannel('channel-1', [blackout])]);
+    expect(schedule.a).toEqual(['2024-01-16T11:00:00.000Z', '2024-01-16T12:00:00.000Z']);
+  });
+
+  it('keeps a task paused by a blackout off-limits to other tasks during the blackout', () => {
+    // a runs 60 min, pauses for the blackout 09–11, then 60 min, so it occupies 08:00–12:00.
+    const blackout = { startDate: '2024-01-16T09:00:00Z', endDate: '2024-01-16T11:00:00Z' };
+    const schedule = reflow(
+      [task('a', '2024-01-16T08:00:00Z', { durationMinutes: 120 }), task('b', '2024-01-16T10:00:00Z')],
+      [weekdayChannel('channel-1', [blackout])],
+    );
+    expect(schedule.a).toEqual(['2024-01-16T08:00:00.000Z', '2024-01-16T12:00:00.000Z']);
+    expect(schedule.b).toEqual(['2024-01-16T12:00:00.000Z', '2024-01-16T13:00:00.000Z']);
+  });
+
+  it('throws when a task uses a channel that is not in the input', () => {
+    const tasks = [task('a', '2024-01-15T08:00:00Z', { settlementChannelId: 'channel-missing' })];
+    expect(() => reflow(tasks)).toThrow(/Task a uses unknown settlement channel channel-missing/);
+  });
+
+  it('moves a start that falls outside operating hours to the next open minute', () => {
+    const schedule = reflow([task('a', '2024-01-15T06:00:00Z')], [weekdayChannel('channel-1')]);
+    expect(schedule.a).toEqual(['2024-01-15T08:00:00.000Z', '2024-01-15T09:00:00.000Z']);
+  });
+
+  it('does not check regulatory holds against operating hours', () => {
+    const schedule = reflow(
+      [task('hold', '2024-01-20T10:00:00Z', { isRegulatoryHold: true, endDate: '2024-01-20T11:00:00Z' })],
+      [weekdayChannel('channel-1')],
+    );
+    expect(schedule.hold).toEqual(['2024-01-20T10:00:00.000Z', '2024-01-20T11:00:00.000Z']);
   });
 
   it('throws when a dependency finishes after its regulatory hold starts', () => {
