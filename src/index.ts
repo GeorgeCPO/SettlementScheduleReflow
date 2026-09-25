@@ -8,20 +8,23 @@ const scenarioIds = requestedId ? [requestedId] : listScenarioIds();
 
 const reflowService = new ReflowService();
 
-try {
-  for (const id of scenarioIds) {
+// Each scenario succeeds or fails on its own, so one impossible schedule doesn't hide the rest.
+for (const id of scenarioIds) {
+  try {
+    // An unknown id throws here, before there is a heading to print.
     const scenario = loadScenario(id);
-    const result = reflowService.reflow(scenario);
-
     console.log(`\n=== ${scenario.name} ===`);
+
+    const result = reflowService.reflow(scenario);
     for (const task of result.updatedTasks) {
       console.log(`${task.data.taskReference}  ${task.data.startDate} → ${task.data.endDate}`);
 
       const changeIndex = result.changes.findIndex((change) => change.taskReference === task.data.taskReference);
       console.log(changeIndex === -1 ? '  unchanged' : `  ${result.explanation[changeIndex]}`);
     }
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : error);
+    // Keep going, but make the run fail so the error isn't silent.
+    process.exitCode = 1;
   }
-} catch (error) {
-  console.error(error instanceof Error ? error.message : error);
-  process.exitCode = 1;
 }
