@@ -60,3 +60,28 @@ describe('Scenario 2 — Market hours & blackout', () => {
     ]);
   });
 });
+
+describe('Scenario 3 — Regulatory hold & channel conflict', () => {
+  const scenario = loadScenario('03-regulatory-hold-conflict.json');
+  const schedule = reflowSchedule(scenario);
+
+  it.each<[string, string, string]>([
+    ['task-201', '2024-01-17T10:00:00.000Z', '2024-01-17T11:00:00.000Z'], // the regulatory hold never moves
+    ['task-202', '2024-01-17T08:00:00.000Z', '2024-01-17T09:00:00.000Z'], // unaffected
+    ['task-203', '2024-01-17T11:00:00.000Z', '2024-01-17T12:30:00.000Z'], // overlapped the hold, pushed past it
+    ['task-204', '2024-01-17T12:30:00.000Z', '2024-01-17T14:30:00.000Z'], // bumped by STL-203, pauses for blackout 13–14
+    ['task-205', '2024-01-17T12:30:00.000Z', '2024-01-17T14:00:00.000Z'], // waits for the later of STL-203 and the hold
+    ['task-206', '2024-01-17T14:30:00.000Z', '2024-01-18T08:30:00.000Z'], // 90 min Wed, pauses overnight, 30 min Thu
+  ])('%s runs %s → %s', (taskId, startDate, endDate) => {
+    expect(schedule[taskId]).toEqual({ startDate, endDate });
+  });
+
+  it('explains each moved task; the hold and STL-202 are unchanged', () => {
+    expect(new ReflowService().reflow(scenario).explanation).toEqual([
+      'STL-20240117-203 moved start by 120 min, end by 120 min (channel busy with STL-20240117-201).',
+      'STL-20240117-204 moved start by 90 min, end by 150 min (channel busy with STL-20240117-203, blackout: CLS settlement cut-off).',
+      'STL-20240117-205 moved start by 120 min, end by 120 min (waited for STL-20240117-203).',
+      'STL-20240117-206 moved start by 30 min, end by 990 min (waited for STL-20240117-204, outside operating hours).',
+    ]);
+  });
+});

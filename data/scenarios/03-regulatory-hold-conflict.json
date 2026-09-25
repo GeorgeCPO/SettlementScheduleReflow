@@ -1,0 +1,215 @@
+{
+  "name": "Regulatory hold & channel conflict",
+  "description": [
+    "A regulator places a compliance hold (STL-201) on the busy FX Settlement desk, Wed 10:00-11:00. Two trade orders compete for the desk.",
+    "Channels open Mon-Fri 08:00-16:00 UTC; FX Settlement has a CLS settlement cut-off blackout Wed 13:00-14:00.",
+    "Trade 201: Margin Check (202) -> Fund Transfer (203) -> Disbursement (205), which also waits for the hold. Trade 202: Fund Transfer (204) -> Reconciliation (206).",
+    "Expected: STL-201 hold unchanged 10:00-11:00; STL-202 unchanged 08:00-09:00;",
+    "STL-203 -> 11:00-12:30 (overlapped the hold); STL-204 -> 12:30-13:00, pauses for the blackout, 14:00-14:30;",
+    "STL-205 -> 12:30-14:00 (the later of STL-203 at 12:30 and the hold at 11:00); STL-206 -> Wed 14:30-16:00, pauses overnight, Thu 08:00-08:30.",
+    "STL-203 claims the FX slot before STL-204 because ready tasks are placed in original start order.",
+    "Expected changes: STL-203 start +120, end +120 min (channel busy with STL-201);",
+    "STL-204 start +90, end +150 min (channel busy with STL-203, blackout: CLS settlement cut-off);",
+    "STL-205 start +120, end +120 min (waited for STL-203);",
+    "STL-206 start +30, end +990 min (waited for STL-204, outside operating hours)."
+  ],
+  "tradeOrders": [
+    {
+      "docId": "trd-201",
+      "docType": "tradeOrder",
+      "data": {
+        "tradeOrderNumber": "TRD-20240117-201",
+        "instrumentId": "EURUSD",
+        "quantity": 5000000,
+        "settlementDate": "2024-01-18T16:00:00Z"
+      }
+    },
+    {
+      "docId": "trd-202",
+      "docType": "tradeOrder",
+      "data": {
+        "tradeOrderNumber": "TRD-20240117-202",
+        "instrumentId": "GBPUSD",
+        "quantity": 2000000,
+        "settlementDate": "2024-01-17T16:00:00Z"
+      }
+    }
+  ],
+  "settlementChannels": [
+    {
+      "docId": "ch-fx",
+      "docType": "settlementChannel",
+      "data": {
+        "name": "FX Settlement",
+        "operatingHours": [
+          {
+            "dayOfWeek": 1,
+            "startHour": 8,
+            "endHour": 16
+          },
+          {
+            "dayOfWeek": 2,
+            "startHour": 8,
+            "endHour": 16
+          },
+          {
+            "dayOfWeek": 3,
+            "startHour": 8,
+            "endHour": 16
+          },
+          {
+            "dayOfWeek": 4,
+            "startHour": 8,
+            "endHour": 16
+          },
+          {
+            "dayOfWeek": 5,
+            "startHour": 8,
+            "endHour": 16
+          }
+        ],
+        "blackoutWindows": [
+          {
+            "startDate": "2024-01-17T13:00:00Z",
+            "endDate": "2024-01-17T14:00:00Z",
+            "reason": "CLS settlement cut-off"
+          }
+        ]
+      }
+    },
+    {
+      "docId": "ch-operations",
+      "docType": "settlementChannel",
+      "data": {
+        "name": "Settlement Operations",
+        "operatingHours": [
+          {
+            "dayOfWeek": 1,
+            "startHour": 8,
+            "endHour": 16
+          },
+          {
+            "dayOfWeek": 2,
+            "startHour": 8,
+            "endHour": 16
+          },
+          {
+            "dayOfWeek": 3,
+            "startHour": 8,
+            "endHour": 16
+          },
+          {
+            "dayOfWeek": 4,
+            "startHour": 8,
+            "endHour": 16
+          },
+          {
+            "dayOfWeek": 5,
+            "startHour": 8,
+            "endHour": 16
+          }
+        ],
+        "blackoutWindows": []
+      }
+    }
+  ],
+  "settlementTasks": [
+    {
+      "docId": "task-201",
+      "docType": "settlementTask",
+      "data": {
+        "taskReference": "STL-20240117-201",
+        "tradeOrderId": "trd-201",
+        "settlementChannelId": "ch-fx",
+        "startDate": "2024-01-17T10:00:00Z",
+        "endDate": "2024-01-17T11:00:00Z",
+        "durationMinutes": 60,
+        "isRegulatoryHold": true,
+        "dependsOnTaskIds": [],
+        "taskType": "regulatoryHold"
+      }
+    },
+    {
+      "docId": "task-202",
+      "docType": "settlementTask",
+      "data": {
+        "taskReference": "STL-20240117-202",
+        "tradeOrderId": "trd-201",
+        "settlementChannelId": "ch-operations",
+        "startDate": "2024-01-17T08:00:00Z",
+        "endDate": "2024-01-17T09:00:00Z",
+        "durationMinutes": 60,
+        "isRegulatoryHold": false,
+        "dependsOnTaskIds": [],
+        "taskType": "marginCheck"
+      }
+    },
+    {
+      "docId": "task-203",
+      "docType": "settlementTask",
+      "data": {
+        "taskReference": "STL-20240117-203",
+        "tradeOrderId": "trd-201",
+        "settlementChannelId": "ch-fx",
+        "startDate": "2024-01-17T09:00:00Z",
+        "endDate": "2024-01-17T10:30:00Z",
+        "durationMinutes": 90,
+        "isRegulatoryHold": false,
+        "dependsOnTaskIds": [
+          "task-202"
+        ],
+        "taskType": "fundTransfer"
+      }
+    },
+    {
+      "docId": "task-204",
+      "docType": "settlementTask",
+      "data": {
+        "taskReference": "STL-20240117-204",
+        "tradeOrderId": "trd-202",
+        "settlementChannelId": "ch-fx",
+        "startDate": "2024-01-17T11:00:00Z",
+        "endDate": "2024-01-17T12:00:00Z",
+        "durationMinutes": 60,
+        "isRegulatoryHold": false,
+        "dependsOnTaskIds": [],
+        "taskType": "fundTransfer"
+      }
+    },
+    {
+      "docId": "task-205",
+      "docType": "settlementTask",
+      "data": {
+        "taskReference": "STL-20240117-205",
+        "tradeOrderId": "trd-201",
+        "settlementChannelId": "ch-operations",
+        "startDate": "2024-01-17T10:30:00Z",
+        "endDate": "2024-01-17T12:00:00Z",
+        "durationMinutes": 90,
+        "isRegulatoryHold": false,
+        "dependsOnTaskIds": [
+          "task-203",
+          "task-201"
+        ],
+        "taskType": "disbursement"
+      }
+    },
+    {
+      "docId": "task-206",
+      "docType": "settlementTask",
+      "data": {
+        "taskReference": "STL-20240117-206",
+        "tradeOrderId": "trd-202",
+        "settlementChannelId": "ch-fx",
+        "startDate": "2024-01-17T14:00:00Z",
+        "endDate": "2024-01-17T16:00:00Z",
+        "durationMinutes": 120,
+        "isRegulatoryHold": false,
+        "dependsOnTaskIds": [
+          "task-204"
+        ],
+        "taskType": "reconciliation"
+      }
+    }
+  ]
+}
