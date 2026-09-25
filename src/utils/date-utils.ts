@@ -6,3 +6,8 @@ export function parseUtc(iso: string): DateTime {
   if (!date.isValid) throw new Error(`Invalid ISO date "${iso}": ${date.invalidExplanation}`);
   return date;
 }
+
+// Formats as an ISO 8601 UTC string without milliseconds, matching the scenario files.
+export function toUtcIso(date: DateTime): string {
+  return date.toUTC().toISO({ suppressMilliseconds: true })!;
+}

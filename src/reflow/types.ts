@@ -1,3 +1,5 @@
+import type { DateTime } from 'luxon';
+
 export interface Document<T extends string, TData> {
   docId: string;
   docType: T;
@@ -79,4 +81,10 @@ export interface ReflowResult {
   updatedTasks: SettlementTask[];
   changes?: unknown;
   explanation?: unknown;
+}
+
+// A span of time a channel is already committed to. Start inclusive, end exclusive, so back-to-back bookings don't clash.
+export interface Booking {
+  start: DateTime;
+  end: DateTime;
 }
