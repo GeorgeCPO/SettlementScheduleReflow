@@ -1,0 +1,140 @@
+{
+  "name": "Market hours & blackout",
+  "description": [
+    "Two independent tasks, each hitting one time constraint. Channels open Mon-Fri 08:00-16:00 UTC.",
+    "STL-101 (brief example): 120 min from Mon 15:00, desk closes 16:00 -> 60 min Mon, resumes Tue 08:00, completes Tue 09:00.",
+    "STL-102: 120 min from Tue 08:00, Fedwire maintenance blackout Tue 09:00-11:00 -> 08:00-09:00, resumes 11:00, completes 12:00."
+  ],
+  "tradeOrders": [
+    {
+      "docId": "trd-101",
+      "docType": "tradeOrder",
+      "data": {
+        "tradeOrderNumber": "TRD-20240115-101",
+        "instrumentId": "US5949181045",
+        "quantity": 2500,
+        "settlementDate": "2024-01-16T16:00:00Z"
+      }
+    },
+    {
+      "docId": "trd-102",
+      "docType": "tradeOrder",
+      "data": {
+        "tradeOrderNumber": "TRD-20240116-102",
+        "instrumentId": "GB0002634946",
+        "quantity": 8000,
+        "settlementDate": "2024-01-17T16:00:00Z"
+      }
+    }
+  ],
+  "settlementChannels": [
+    {
+      "docId": "ch-domestic-wire",
+      "docType": "settlementChannel",
+      "data": {
+        "name": "Domestic Wire Desk",
+        "operatingHours": [
+          {
+            "dayOfWeek": 1,
+            "startHour": 8,
+            "endHour": 16
+          },
+          {
+            "dayOfWeek": 2,
+            "startHour": 8,
+            "endHour": 16
+          },
+          {
+            "dayOfWeek": 3,
+            "startHour": 8,
+            "endHour": 16
+          },
+          {
+            "dayOfWeek": 4,
+            "startHour": 8,
+            "endHour": 16
+          },
+          {
+            "dayOfWeek": 5,
+            "startHour": 8,
+            "endHour": 16
+          }
+        ],
+        "blackoutWindows": []
+      }
+    },
+    {
+      "docId": "ch-intl-wire",
+      "docType": "settlementChannel",
+      "data": {
+        "name": "International Wire Desk",
+        "operatingHours": [
+          {
+            "dayOfWeek": 1,
+            "startHour": 8,
+            "endHour": 16
+          },
+          {
+            "dayOfWeek": 2,
+            "startHour": 8,
+            "endHour": 16
+          },
+          {
+            "dayOfWeek": 3,
+            "startHour": 8,
+            "endHour": 16
+          },
+          {
+            "dayOfWeek": 4,
+            "startHour": 8,
+            "endHour": 16
+          },
+          {
+            "dayOfWeek": 5,
+            "startHour": 8,
+            "endHour": 16
+          }
+        ],
+        "blackoutWindows": [
+          {
+            "startDate": "2024-01-16T09:00:00Z",
+            "endDate": "2024-01-16T11:00:00Z",
+            "reason": "Fedwire settlement system maintenance"
+          }
+        ]
+      }
+    }
+  ],
+  "settlementTasks": [
+    {
+      "docId": "task-101",
+      "docType": "settlementTask",
+      "data": {
+        "taskReference": "STL-20240115-101",
+        "tradeOrderId": "trd-101",
+        "settlementChannelId": "ch-domestic-wire",
+        "startDate": "2024-01-15T15:00:00Z",
+        "endDate": "2024-01-15T17:00:00Z",
+        "durationMinutes": 120,
+        "isRegulatoryHold": false,
+        "dependsOnTaskIds": [],
+        "taskType": "fundTransfer"
+      }
+    },
+    {
+      "docId": "task-102",
+      "docType": "settlementTask",
+      "data": {
+        "taskReference": "STL-20240116-102",
+        "tradeOrderId": "trd-102",
+        "settlementChannelId": "ch-intl-wire",
+        "startDate": "2024-01-16T08:00:00Z",
+        "endDate": "2024-01-16T10:00:00Z",
+        "durationMinutes": 120,
+        "isRegulatoryHold": false,
+        "dependsOnTaskIds": [],
+        "taskType": "disbursement"
+      }
+    }
+  ]
+}

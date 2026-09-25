@@ -8,6 +8,7 @@
   },
   "scripts": {
     "start": "tsx src/index.ts",
+    "scenario": "tsx src/index.ts",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },

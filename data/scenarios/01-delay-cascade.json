@@ -1,0 +1,162 @@
+{
+  "name": "Delay cascade",
+  "description": [
+    "The counterparty's fund transfer (STL-001) arrived late: planned 09:00-11:00, now runs 11:00-13:00.",
+    "Downstream tasks still hold their original times, so they start before their upstream completes.",
+    "Chain: Fund Transfer -> Margin Check -> Disbursement -> Reconciliation. Channels open Mon-Fri 08:00-16:00 UTC.",
+    "Expected: STL-001 unchanged 11:00-13:00; STL-002 -> 13:00-14:00; STL-003 -> 14:00-15:30;",
+    "STL-004 -> Mon 15:30-16:00, pauses overnight, Tue 08:00-08:30."
+  ],
+  "tradeOrders": [
+    {
+      "docId": "trd-042",
+      "docType": "tradeOrder",
+      "data": {
+        "tradeOrderNumber": "TRD-20240115-042",
+        "instrumentId": "US0378331005",
+        "quantity": 10000,
+        "settlementDate": "2024-01-17T16:00:00Z"
+      }
+    }
+  ],
+  "settlementChannels": [
+    {
+      "docId": "ch-domestic-wire",
+      "docType": "settlementChannel",
+      "data": {
+        "name": "Domestic Wire Desk",
+        "operatingHours": [
+          {
+            "dayOfWeek": 1,
+            "startHour": 8,
+            "endHour": 16
+          },
+          {
+            "dayOfWeek": 2,
+            "startHour": 8,
+            "endHour": 16
+          },
+          {
+            "dayOfWeek": 3,
+            "startHour": 8,
+            "endHour": 16
+          },
+          {
+            "dayOfWeek": 4,
+            "startHour": 8,
+            "endHour": 16
+          },
+          {
+            "dayOfWeek": 5,
+            "startHour": 8,
+            "endHour": 16
+          }
+        ],
+        "blackoutWindows": []
+      }
+    },
+    {
+      "docId": "ch-operations",
+      "docType": "settlementChannel",
+      "data": {
+        "name": "Settlement Operations",
+        "operatingHours": [
+          {
+            "dayOfWeek": 1,
+            "startHour": 8,
+            "endHour": 16
+          },
+          {
+            "dayOfWeek": 2,
+            "startHour": 8,
+            "endHour": 16
+          },
+          {
+            "dayOfWeek": 3,
+            "startHour": 8,
+            "endHour": 16
+          },
+          {
+            "dayOfWeek": 4,
+            "startHour": 8,
+            "endHour": 16
+          },
+          {
+            "dayOfWeek": 5,
+            "startHour": 8,
+            "endHour": 16
+          }
+        ],
+        "blackoutWindows": []
+      }
+    }
+  ],
+  "settlementTasks": [
+    {
+      "docId": "task-001",
+      "docType": "settlementTask",
+      "data": {
+        "taskReference": "STL-20240115-001",
+        "tradeOrderId": "trd-042",
+        "settlementChannelId": "ch-domestic-wire",
+        "startDate": "2024-01-15T11:00:00Z",
+        "endDate": "2024-01-15T13:00:00Z",
+        "durationMinutes": 120,
+        "isRegulatoryHold": false,
+        "dependsOnTaskIds": [],
+        "taskType": "fundTransfer"
+      }
+    },
+    {
+      "docId": "task-002",
+      "docType": "settlementTask",
+      "data": {
+        "taskReference": "STL-20240115-002",
+        "tradeOrderId": "trd-042",
+        "settlementChannelId": "ch-operations",
+        "startDate": "2024-01-15T11:00:00Z",
+        "endDate": "2024-01-15T12:00:00Z",
+        "durationMinutes": 60,
+        "isRegulatoryHold": false,
+        "dependsOnTaskIds": [
+          "task-001"
+        ],
+        "taskType": "marginCheck"
+      }
+    },
+    {
+      "docId": "task-003",
+      "docType": "settlementTask",
+      "data": {
+        "taskReference": "STL-20240115-003",
+        "tradeOrderId": "trd-042",
+        "settlementChannelId": "ch-domestic-wire",
+        "startDate": "2024-01-15T12:00:00Z",
+        "endDate": "2024-01-15T13:30:00Z",
+        "durationMinutes": 90,
+        "isRegulatoryHold": false,
+        "dependsOnTaskIds": [
+          "task-002"
+        ],
+        "taskType": "disbursement"
+      }
+    },
+    {
+      "docId": "task-004",
+      "docType": "settlementTask",
+      "data": {
+        "taskReference": "STL-20240115-004",
+        "tradeOrderId": "trd-042",
+        "settlementChannelId": "ch-operations",
+        "startDate": "2024-01-15T13:30:00Z",
+        "endDate": "2024-01-15T14:30:00Z",
+        "durationMinutes": 60,
+        "isRegulatoryHold": false,
+        "dependsOnTaskIds": [
+          "task-003"
+        ],
+        "taskType": "reconciliation"
+      }
+    }
+  ]
+}

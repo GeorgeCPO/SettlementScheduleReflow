@@ -68,3 +68,15 @@ export interface TradeOrderData {
 }
 
 export type TradeOrder = Document<'tradeOrder', TradeOrderData>;
+
+export interface ReflowInput {
+  settlementTasks: SettlementTask[];
+  settlementChannels: SettlementChannel[];
+  tradeOrders: TradeOrder[];
+}
+
+export interface ReflowResult {
+  updatedTasks: SettlementTask[];
+  changes?: unknown;
+  explanation?: unknown;
+}
