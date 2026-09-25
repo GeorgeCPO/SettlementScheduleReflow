@@ -11,10 +11,11 @@ import type {
 } from '../src/reflow/types.ts';
 import { parseUtc, toUtcIso } from '../src/utils/date-utils.ts';
 
-// The planned end is start + duration unless overridden, so a task that isn't moved produces no change.
+// The planned end is start + prep + duration unless overridden, so a task that isn't moved produces no change.
 function task(docId: string, startDate: string, overrides: Partial<SettlementTaskData> = {}): SettlementTask {
   const durationMinutes = overrides.durationMinutes ?? 60;
-  const endDate = toUtcIso(parseUtc(startDate).plus({ minutes: durationMinutes }));
+  const prepTimeMinutes = overrides.prepTimeMinutes ?? 0;
+  const endDate = toUtcIso(parseUtc(startDate).plus({ minutes: prepTimeMinutes + durationMinutes }));
   return {
     docId,
     docType: 'settlementTask',
@@ -347,5 +348,44 @@ describe('ReflowService settlement deadlines', () => {
   it('throws when a task belongs to a trade order that is not in the input', () => {
     const tasks = [task('a', '2024-01-15T08:00:00Z', { tradeOrderId: 'order-missing' })];
     expect(() => reflow(tasks)).toThrow('Task a belongs to unknown trade order order-missing');
+  });
+});
+
+describe('ReflowService prep time', () => {
+  it('adds prep to the working time of the task', () => {
+    // a preps 30 min then processes 60 min, so b on the same channel waits until 09:30.
+    const schedule = reflow([
+      task('a', '2024-01-15T08:00:00Z', { prepTimeMinutes: 30 }),
+      task('b', '2024-01-15T09:00:00Z'),
+    ]);
+    expect(schedule.a).toEqual(['2024-01-15T08:00:00.000Z', '2024-01-15T09:30:00.000Z']);
+    expect(schedule.b).toEqual(['2024-01-15T09:30:00.000Z', '2024-01-15T10:30:00.000Z']);
+  });
+
+  it('pauses prep at closing time and resumes it the next morning', () => {
+    // a preps 30 min Mon, pauses overnight, preps 30 min Tue, then processes 60 min.
+    const schedule = reflow(
+      [task('a', '2024-01-15T15:30:00Z', { prepTimeMinutes: 60 })],
+      [weekdayChannel('channel-1')],
+    );
+    expect(schedule.a).toEqual(['2024-01-15T15:30:00.000Z', '2024-01-16T09:30:00.000Z']);
+  });
+
+  it('starts prep only once a dependency finishes', () => {
+    const schedule = reflow([
+      task('a', '2024-01-15T08:00:00Z', { durationMinutes: 120 }),
+      task('b', '2024-01-15T08:00:00Z', { dependsOnTaskIds: ['a'], settlementChannelId: 'channel-2', prepTimeMinutes: 30 }),
+    ]);
+    expect(schedule.b).toEqual(['2024-01-15T10:00:00.000Z', '2024-01-15T11:30:00.000Z']);
+  });
+
+  it('leaves a task without prepTimeMinutes unchanged', () => {
+    const tasks = [task('a', '2024-01-15T08:00:00Z')];
+    expect(tasks[0]!.data.prepTimeMinutes).toBeUndefined();
+
+    const result = reflowResult(tasks);
+    expect(result.updatedTasks[0]!.data.startDate).toBe('2024-01-15T08:00:00Z');
+    expect(result.updatedTasks[0]!.data.endDate).toBe('2024-01-15T09:00:00Z');
+    expect(result.changes).toEqual([]);
   });
 });

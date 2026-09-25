@@ -23,6 +23,7 @@ export class ReflowService {
   //   2. each channel runs one task at a time,
   //   3. regulatory holds keep their original dates,
   //   4. tasks only process while their channel is open (operating hours, minus blackouts).
+// A task's prep time runs just before its processing, as part of the same slot, and also counts as working time.
   // Tasks only ever move later, never earlier than originally planned.
   // Throws when the result is impossible, e.g. a task would finish after its trade order's settlement date.
   reflow(input: ReflowInput): ReflowResult {
@@ -173,7 +174,7 @@ function assertHoldCanStart(hold: SettlementTask, earliestStart: DateTime): void
 }
 
 // Moves the task to the first free slot on its channel at or after `earliestStart`, and books that slot.
-// @upgrade prepTimeMinutes is ignored; add it to the working minutes once a scenario needs it.
+// Prep runs first in the same slot, so the slot starts when prep begins and ends when processing ends.
 function moveToFirstFreeSlot(
   task: SettlementTask,
   earliestStart: DateTime,
@@ -181,7 +182,8 @@ function moveToFirstFreeSlot(
   channel: SettlementChannel,
   reasons: string[],
 ): void {
-  const slot = findFreeSlot(bookings, earliestStart, task.data.durationMinutes, channel, reasons);
+  const workingMinutes = (task.data.prepTimeMinutes ?? 0) + task.data.durationMinutes;
+  const slot = findFreeSlot(bookings, earliestStart, workingMinutes, channel, reasons);
 
   bookings.push({ start: slot.start, end: slot.end, taskReference: task.data.taskReference });
   task.data.startDate = toUtcIso(slot.start);
