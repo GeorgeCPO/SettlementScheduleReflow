@@ -8,7 +8,9 @@ conflicts, operating hours, blackout windows
 ```bash
 npm start                         # all scenarios
 npm run scenario -- <id>          # one scenario (data/scenarios/<id>.json)
-npm test                          # vitest
+npm test                          # vitest (all)
+npm run test:unit                 # unit tests only
+npm run test:e2e                  # e2e scenario tests only (*.e2e.test.ts)
 npm run typecheck                 # tsc (tests/start don't typecheck, so run this)
 ```
 

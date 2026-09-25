@@ -10,6 +10,8 @@
     "start": "tsx src/index.ts",
     "scenario": "tsx src/index.ts",
     "test": "vitest run",
+    "test:unit": "vitest run --exclude '**/*.e2e.test.ts'",
+    "test:e2e": "vitest run .e2e.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
