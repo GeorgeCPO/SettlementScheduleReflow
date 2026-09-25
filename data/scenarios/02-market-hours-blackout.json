@@ -3,7 +3,9 @@
   "description": [
     "Two independent tasks, each hitting one time constraint. Channels open Mon-Fri 08:00-16:00 UTC.",
     "STL-101 (brief example): 120 min from Mon 15:00, desk closes 16:00 -> 60 min Mon, resumes Tue 08:00, completes Tue 09:00.",
-    "STL-102: 120 min from Tue 08:00, Fedwire maintenance blackout Tue 09:00-11:00 -> 08:00-09:00, resumes 11:00, completes 12:00."
+    "STL-102: 120 min from Tue 08:00, Fedwire maintenance blackout Tue 09:00-11:00 -> 08:00-09:00, resumes 11:00, completes 12:00.",
+    "Expected changes: STL-101 start +0, end +960 min (outside operating hours);",
+    "STL-102 start +0, end +120 min (blackout: Fedwire settlement system maintenance)."
   ],
   "tradeOrders": [
     {

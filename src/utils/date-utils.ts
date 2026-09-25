@@ -64,6 +64,35 @@ function nextOpenInterval(from: DateTime, channel: SettlementChannel): Interval 
   throw new Error(`Settlement channel ${channel.docId} has no open time within ${OPEN_TIME_SEARCH_DAYS} days of ${toUtcIso(from)}`);
 }
 
+// Why `channel` is closed somewhere between `from` and `to`: each overlapping blackout, and "outside operating hours"
+// if some of that time is neither open nor in a blackout.
+export function closedTimeReasons(from: DateTime, to: DateTime, channel: SettlementChannel): string[] {
+  const reasons: string[] = [];
+  if (to <= from) {
+    return reasons;
+  }
+
+  const span = Interval.fromDateTimes(from, to);
+  const openOrBlackout: Interval[] = [];
+  for (const window of channel.data.blackoutWindows) {
+    const blackout = Interval.fromDateTimes(parseUtc(window.startDate), parseUtc(window.endDate));
+    if (span.overlaps(blackout)) {
+      reasons.push(`blackout: ${window.reason ?? 'no reason given'}`);
+    }
+    openOrBlackout.push(blackout);
+  }
+
+  for (let day = from.startOf('day'); day < to; day = day.plus({ days: 1 })) {
+    for (const open of openIntervalsOn(day, channel)) {
+      openOrBlackout.push(open);
+    }
+  }
+  if (span.difference(...openOrBlackout).length > 0) {
+    reasons.push('outside operating hours');
+  }
+  return reasons;
+}
+
 // The channel's open intervals on the UTC day starting at `day`: its operating hours minus its blackouts, in time order.
 function openIntervalsOn(day: DateTime, channel: SettlementChannel): Interval[] {
   // Luxon numbers weekdays Monday = 1 … Sunday = 7; operating hours use Sunday = 0.

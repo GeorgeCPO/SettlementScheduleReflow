@@ -5,7 +5,10 @@
     "Downstream tasks still hold their original times, so they start before their upstream completes.",
     "Chain: Fund Transfer -> Margin Check -> Disbursement -> Reconciliation. Channels open Mon-Fri 08:00-16:00 UTC.",
     "Expected: STL-001 unchanged 11:00-13:00; STL-002 -> 13:00-14:00; STL-003 -> 14:00-15:30;",
-    "STL-004 -> Mon 15:30-16:00, pauses overnight, Tue 08:00-08:30."
+    "STL-004 -> Mon 15:30-16:00, pauses overnight, Tue 08:00-08:30.",
+    "Expected changes: STL-001 none; STL-002 start +120, end +120 min (waited for STL-001);",
+    "STL-003 start +120, end +120 min (waited for STL-002);",
+    "STL-004 start +120, end +1080 min (waited for STL-003, outside operating hours)."
   ],
   "tradeOrders": [
     {

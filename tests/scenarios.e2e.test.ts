@@ -21,7 +21,8 @@ function reflowSchedule(input: ReflowInput): ExpectedSchedule {
 }
 
 describe('Scenario 1 — Delay cascade', () => {
-  const schedule = reflowSchedule(loadScenario('01-delay-cascade.json'));
+  const scenario = loadScenario('01-delay-cascade.json');
+  const schedule = reflowSchedule(scenario);
 
   it.each<[string, string, string]>([
     ['task-001', '2024-01-15T11:00:00.000Z', '2024-01-15T13:00:00.000Z'], // the delayed fund transfer stays put
@@ -31,15 +32,31 @@ describe('Scenario 1 — Delay cascade', () => {
   ])('%s runs %s → %s', (taskId, startDate, endDate) => {
     expect(schedule[taskId]).toEqual({ startDate, endDate });
   });
+
+  it('explains each moved task; STL-001 is unchanged', () => {
+    expect(new ReflowService().reflow(scenario).explanation).toEqual([
+      'STL-20240115-002 moved start by 120 min, end by 120 min (waited for STL-20240115-001).',
+      'STL-20240115-003 moved start by 120 min, end by 120 min (waited for STL-20240115-002).',
+      'STL-20240115-004 moved start by 120 min, end by 1080 min (waited for STL-20240115-003, outside operating hours).',
+    ]);
+  });
 });
 
 describe('Scenario 2 — Market hours & blackout', () => {
-  const schedule = reflowSchedule(loadScenario('02-market-hours-blackout.json'));
+  const scenario = loadScenario('02-market-hours-blackout.json');
+  const schedule = reflowSchedule(scenario);
 
   it.each<[string, string, string]>([
     ['task-101', '2024-01-15T15:00:00.000Z', '2024-01-16T09:00:00.000Z'], // 60 min Mon, pauses at close, 60 min Tue
     ['task-102', '2024-01-16T08:00:00.000Z', '2024-01-16T12:00:00.000Z'], // 60 min, pauses for blackout 09–11, 60 min
   ])('%s runs %s → %s', (taskId, startDate, endDate) => {
     expect(schedule[taskId]).toEqual({ startDate, endDate });
+  });
+
+  it('explains each moved task', () => {
+    expect(new ReflowService().reflow(scenario).explanation).toEqual([
+      'STL-20240115-101 moved start by 0 min, end by 960 min (outside operating hours).',
+      'STL-20240116-102 moved start by 0 min, end by 120 min (blackout: Fedwire settlement system maintenance).',
+    ]);
   });
 });

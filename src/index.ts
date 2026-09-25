@@ -16,6 +16,9 @@ try {
     console.log(`\n=== ${scenario.name} ===`);
     for (const task of result.updatedTasks) {
       console.log(`${task.data.taskReference}  ${task.data.startDate} → ${task.data.endDate}`);
+
+      const changeIndex = result.changes.findIndex((change) => change.taskReference === task.data.taskReference);
+      console.log(changeIndex === -1 ? '  unchanged' : `  ${result.explanation[changeIndex]}`);
     }
   }
 } catch (error) {

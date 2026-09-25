@@ -77,14 +77,28 @@ export interface ReflowInput {
   tradeOrders: TradeOrder[];
 }
 
+// A task the reflow moved. Shifts are in minutes; reasons are recorded while the task is placed.
+export interface TaskChange {
+  taskReference: string;
+  oldStartDate: string;
+  newStartDate: string;
+  oldEndDate: string;
+  newEndDate: string;
+  startShiftMinutes: number;
+  endShiftMinutes: number;
+  reasons: string[];
+}
+
 export interface ReflowResult {
   updatedTasks: SettlementTask[];
-  changes?: unknown;
-  explanation?: unknown;
+  changes: TaskChange[];
+  // One sentence per change.
+  explanation: string[];
 }
 
 // A span of time a channel is already committed to. Start inclusive, end exclusive, so back-to-back bookings don't clash.
 export interface Booking {
   start: DateTime;
   end: DateTime;
+  taskReference: string;
 }

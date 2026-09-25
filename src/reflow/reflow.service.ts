@@ -1,7 +1,13 @@
 import type { DateTime } from 'luxon';
-import { calculateEndDateWithOperatingHours, nextOpenMinute, parseUtc, toUtcIso } from '../utils/date-utils.ts';
+import {
+  calculateEndDateWithOperatingHours,
+  closedTimeReasons,
+  nextOpenMinute,
+  parseUtc,
+  toUtcIso,
+} from '../utils/date-utils.ts';
 import { sortByDependencies } from './dag.ts';
-import type { Booking, ReflowInput, ReflowResult, SettlementChannel, SettlementTask } from './types.ts';
+import type { Booking, ReflowInput, ReflowResult, SettlementChannel, SettlementTask, TaskChange } from './types.ts';
 
 export class ReflowService {
   // Reschedules tasks so that:
@@ -20,9 +26,12 @@ export class ReflowService {
 
     // Step 2: place tasks upstream-first, so a task's dependencies already have their final end dates when we reach it.
     // @upgrade Greedy placement: always valid, but an earlier task can take a slot a later one needed more.
-    const endById: Record<string, DateTime> = {};
+    const placedById: Record<string, SettlementTask> = {};
+    const reasonsById: Record<string, string[]> = {};
     for (const task of sortByDependencies(tasks)) {
-      const earliestStart = earliestAllowedStart(task, endById);
+      const reasons: string[] = [];
+      reasonsById[task.docId] = reasons;
+      const earliestStart = earliestAllowedStart(task, placedById, reasons);
 
       if (task.data.isRegulatoryHold) {
         assertHoldCanStart(task, earliestStart);
@@ -32,14 +41,26 @@ export class ReflowService {
         if (!channel) {
           throw new Error(`Task ${task.data.taskReference} uses unknown settlement channel ${channelId}`);
         }
-        moveToFirstFreeSlot(task, earliestStart, bookingsByChannel[channelId]!, channel);
+        moveToFirstFreeSlot(task, earliestStart, bookingsByChannel[channelId]!, channel, reasons);
       }
 
-      endById[task.docId] = parseUtc(task.data.endDate);
+      placedById[task.docId] = task;
     }
 
     // Results keep the caller's task order; sorting is an internal detail.
-    return { updatedTasks: tasks };
+    const changes: TaskChange[] = [];
+    const explanation: string[] = [];
+    for (let i = 0; i < tasks.length; i++) {
+      const updated = tasks[i]!;
+      const change = describeChange(input.settlementTasks[i]!, updated, reasonsById[updated.docId]!);
+      if (change) {
+        changes.push(change);
+        const shifts = `start by ${change.startShiftMinutes} min, end by ${change.endShiftMinutes} min`;
+        explanation.push(`${change.taskReference} moved ${shifts} (${change.reasons.join(', ')}).`);
+      }
+    }
+
+    return { updatedTasks: tasks, changes, explanation };
   }
 }
 
@@ -65,6 +86,7 @@ function bookRegulatoryHolds(tasks: SettlementTask[]): Record<string, Booking[]>
       const holdBooking: Booking = {
         start: parseUtc(task.data.startDate),
         end: parseUtc(task.data.endDate),
+        taskReference: task.data.taskReference,
       };
       bookingsByChannel[channelId].push(holdBooking);
     }
@@ -73,13 +95,21 @@ function bookRegulatoryHolds(tasks: SettlementTask[]): Record<string, Booking[]>
 }
 
 // The later of the task's original start and the moment its last dependency finishes.
-function earliestAllowedStart(task: SettlementTask, endById: Record<string, DateTime>): DateTime {
+// If a dependency pushed the start later, records the one that finishes last as a reason.
+function earliestAllowedStart(task: SettlementTask, placedById: Record<string, SettlementTask>, reasons: string[]): DateTime {
   let earliest = parseUtc(task.data.startDate);
+  let latestDependency: SettlementTask | undefined;
   for (const depId of task.data.dependsOnTaskIds) {
-    const dependencyEnd = endById[depId]!;
+    const dependency = placedById[depId]!;
+    const dependencyEnd = parseUtc(dependency.data.endDate);
     if (dependencyEnd > earliest) {
       earliest = dependencyEnd;
+      latestDependency = dependency;
     }
+  }
+
+  if (latestDependency) {
+    addReasons(reasons, [`waited for ${latestDependency.data.taskReference}`]);
   }
   return earliest;
 }
@@ -99,10 +129,11 @@ function moveToFirstFreeSlot(
   earliestStart: DateTime,
   bookings: Booking[],
   channel: SettlementChannel,
+  reasons: string[],
 ): void {
-  const slot = findFreeSlot(bookings, earliestStart, task.data.durationMinutes, channel);
+  const slot = findFreeSlot(bookings, earliestStart, task.data.durationMinutes, channel, reasons);
 
-  bookings.push(slot);
+  bookings.push({ start: slot.start, end: slot.end, taskReference: task.data.taskReference });
   task.data.startDate = toUtcIso(slot.start);
   task.data.endDate = toUtcIso(slot.end);
 }
@@ -113,9 +144,17 @@ function moveToFirstFreeSlot(
 //   - booking is over before the candidate  → irrelevant, skip it
 //   - task would end before the booking     → it fits in the gap, done
 //   - otherwise they'd overlap              → try again at the first open minute after that booking
-function findFreeSlot(bookings: Booking[], from: DateTime, minutes: number, channel: SettlementChannel): Booking {
+// Records why the start moved as it happens, then why the chosen slot pauses.
+function findFreeSlot(
+  bookings: Booking[],
+  from: DateTime,
+  minutes: number,
+  channel: SettlementChannel,
+  reasons: string[],
+): Omit<Booking, 'taskReference'> {
   const inTimeOrder = [...bookings].sort((a, b) => a.start.toMillis() - b.start.toMillis());
   let start = nextOpenMinute(from, channel);
+  addReasons(reasons, closedTimeReasons(from, start, channel));
   let end = calculateEndDateWithOperatingHours(start, minutes, channel);
   for (const booking of inTimeOrder) {
     if (booking.end <= start) {
@@ -126,8 +165,45 @@ function findFreeSlot(bookings: Booking[], from: DateTime, minutes: number, chan
       break;
     }
 
+    addReasons(reasons, [`channel busy with ${booking.taskReference}`]);
     start = nextOpenMinute(booking.end, channel);
+    addReasons(reasons, closedTimeReasons(booking.end, start, channel));
     end = calculateEndDateWithOperatingHours(start, minutes, channel);
   }
+  addReasons(reasons, closedTimeReasons(start, end, channel));
   return { start, end };
+}
+
+// Appends reasons not recorded yet, keeping the order they happened in.
+function addReasons(reasons: string[], newReasons: string[]): void {
+  for (const reason of newReasons) {
+    if (!reasons.includes(reason)) {
+      reasons.push(reason);
+    }
+  }
+}
+
+// Returns how a task moved, or undefined when it kept both dates.
+function describeChange(original: SettlementTask, updated: SettlementTask, reasons: string[]): TaskChange | undefined {
+  const oldStart = parseUtc(original.data.startDate);
+  const newStart = parseUtc(updated.data.startDate);
+  const oldEnd = parseUtc(original.data.endDate);
+  const newEnd = parseUtc(updated.data.endDate);
+
+  const startShiftMinutes = newStart.diff(oldStart, 'minutes').minutes;
+  const endShiftMinutes = newEnd.diff(oldEnd, 'minutes').minutes;
+  if (startShiftMinutes === 0 && endShiftMinutes === 0) {
+    return undefined;
+  }
+
+  return {
+    taskReference: updated.data.taskReference,
+    oldStartDate: original.data.startDate,
+    newStartDate: updated.data.startDate,
+    oldEndDate: original.data.endDate,
+    newEndDate: updated.data.endDate,
+    startShiftMinutes,
+    endShiftMinutes,
+    reasons,
+  };
 }

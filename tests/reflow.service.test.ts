@@ -1,8 +1,19 @@
 import { describe, expect, it } from 'vitest';
 import { ReflowService } from '../src/reflow/reflow.service.ts';
-import type { BlackoutWindow, OperatingHours, SettlementChannel, SettlementTask, SettlementTaskData } from '../src/reflow/types.ts';
+import type {
+  BlackoutWindow,
+  OperatingHours,
+  ReflowResult,
+  SettlementChannel,
+  SettlementTask,
+  SettlementTaskData,
+} from '../src/reflow/types.ts';
+import { parseUtc, toUtcIso } from '../src/utils/date-utils.ts';
 
+// The planned end is start + duration unless overridden, so a task that isn't moved produces no change.
 function task(docId: string, startDate: string, overrides: Partial<SettlementTaskData> = {}): SettlementTask {
+  const durationMinutes = overrides.durationMinutes ?? 60;
+  const endDate = toUtcIso(parseUtc(startDate).plus({ minutes: durationMinutes }));
   return {
     docId,
     docType: 'settlementTask',
@@ -11,8 +22,8 @@ function task(docId: string, startDate: string, overrides: Partial<SettlementTas
       tradeOrderId: 'order-1',
       settlementChannelId: 'channel-1',
       startDate,
-      endDate: startDate,
-      durationMinutes: 60,
+      endDate,
+      durationMinutes,
       isRegulatoryHold: false,
       dependsOnTaskIds: [],
       taskType: 'marginCheck',
@@ -51,6 +62,16 @@ function reflow(tasks: SettlementTask[], settlementChannels = alwaysOpenChannels
   return Object.fromEntries(
     updatedTasks.map((t) => [t.docId, [new Date(t.data.startDate).toISOString(), new Date(t.data.endDate).toISOString()]]),
   );
+}
+
+function reflowResult(tasks: SettlementTask[], settlementChannels = alwaysOpenChannels): ReflowResult {
+  return new ReflowService().reflow({ settlementTasks: tasks, settlementChannels, tradeOrders: [] });
+}
+
+// The recorded reasons for one task, or undefined when it has no change entry.
+function reasonsFor(result: ReflowResult, taskReference: string): string[] | undefined {
+  const change = result.changes.find((c) => c.taskReference === taskReference);
+  return change?.reasons;
 }
 
 describe('ReflowService', () => {
@@ -218,5 +239,52 @@ describe('ReflowService', () => {
       }),
     ];
     expect(() => reflow(tasks)).toThrow(/Regulatory hold hold/);
+  });
+});
+
+describe('ReflowService changes', () => {
+  it('records a dependency that pushed the start later', () => {
+    const result = reflowResult([
+      task('a', '2024-01-15T11:00:00Z', { durationMinutes: 120 }),
+      task('b', '2024-01-15T11:00:00Z', { dependsOnTaskIds: ['a'], settlementChannelId: 'channel-2' }),
+    ]);
+    expect(result.changes).toEqual([
+      {
+        taskReference: 'b',
+        oldStartDate: '2024-01-15T11:00:00Z',
+        newStartDate: '2024-01-15T13:00:00Z',
+        oldEndDate: '2024-01-15T12:00:00Z',
+        newEndDate: '2024-01-15T14:00:00Z',
+        startShiftMinutes: 120,
+        endShiftMinutes: 120,
+        reasons: ['waited for a'],
+      },
+    ]);
+    expect(result.explanation).toEqual(['b moved start by 120 min, end by 120 min (waited for a).']);
+  });
+
+  it('records a booking on the channel that pushed the start later', () => {
+    const result = reflowResult([task('a', '2024-01-15T08:00:00Z'), task('b', '2024-01-15T08:30:00Z')]);
+    expect(reasonsFor(result, 'b')).toEqual(['channel busy with a']);
+  });
+
+  it('records a start moved out of closed hours', () => {
+    const result = reflowResult([task('a', '2024-01-15T06:00:00Z')], [weekdayChannel('channel-1')]);
+    expect(reasonsFor(result, 'a')).toEqual(['outside operating hours']);
+  });
+
+  it('records a start moved out of a blackout', () => {
+    const blackout = { startDate: '2024-01-16T09:00:00Z', endDate: '2024-01-16T11:00:00Z', reason: 'Fedwire maintenance' };
+    const result = reflowResult([task('a', '2024-01-16T09:30:00Z')], [weekdayChannel('channel-1', [blackout])]);
+    expect(reasonsFor(result, 'a')).toEqual(['blackout: Fedwire maintenance']);
+  });
+
+  it('records no change for tasks that did not move, regulatory holds included', () => {
+    const result = reflowResult([
+      task('hold', '2024-01-15T09:00:00Z', { isRegulatoryHold: true }),
+      task('a', '2024-01-15T10:00:00Z', { dependsOnTaskIds: ['hold'] }),
+    ]);
+    expect(result.changes).toEqual([]);
+    expect(result.explanation).toEqual([]);
   });
 });
